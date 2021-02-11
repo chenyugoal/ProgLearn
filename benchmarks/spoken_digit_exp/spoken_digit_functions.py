@@ -16,7 +16,7 @@ from proglearn.progressive_learner import ProgressiveLearner
 from proglearn.transformers import NeuralClassificationTransformer, TreeClassificationTransformer
 from proglearn.voters import TreeClassificationVoter, KNNClassificationVoter
 from sklearn.model_selection import train_test_split
-
+import pandas as pd
 
 def load_spoken_digit(path_recordings):
     file = os.listdir(path_recordings)
@@ -74,11 +74,12 @@ def display_spectrogram(x_spec_mini, y_number, y_speaker, num):
     plt.suptitle("Short-Time Fourier Transform Spectrogram of Number " + str(num), fontsize=18)
 
 
-def single_experiment(x, y, y_speaker, ntrees=19, model='uf', shuffle=False):
+def single_experiment(x, y, y_speaker, ntrees=10, model='uf', shuffle=False):
     num_tasks = 6
     num_points_per_task = 3000 / num_tasks
     speakers = ['g', 'j', 'l', 'n', 't', 'y']
-    accuracies_across_tasks = []
+    single_task_accuracies = np.zeros(num_tasks,dtype=float)
+    accuracies = np.zeros(27,dtype=float)
 
     if model == 'dnn':
         x_all = x
@@ -137,92 +138,69 @@ def single_experiment(x, y, y_speaker, ntrees=19, model='uf', shuffle=False):
     else:
         pass
 
-    for j, task0_speaker in enumerate(speakers):
-        progressive_learner = ProgressiveLearner(default_transformer_class=default_transformer_class,
+    progressive_learner = ProgressiveLearner(default_transformer_class=default_transformer_class,
                                                  default_transformer_kwargs=default_transformer_kwargs,
                                                  default_voter_class=default_voter_class,
                                                  default_voter_kwargs=default_voter_kwargs,
                                                  default_decider_class=default_decider_class)
 
+    train_x_task, test_x_task, train_y_task, test_y_task = [[],[],[],[],[],[]], [[],[],[],[],[],[]], [[],[],[],[],[],[]], [[],[],[],[],[],[]]
+
+    for j, task0_speaker in enumerate(speakers):
         index = np.where(y_speaker == task0_speaker)
         x_task0 = x_all[index]
         y_task0 = y_all[index]
-        train_x_task0, test_x_task0, train_y_task0, test_y_task0 = train_test_split(x_task0, y_task0,
-                                                                                    test_size=0.25)
+        train_x_task[j], test_x_task[j], train_y_task[j], test_y_task[j] = train_test_split(x_task0, y_task0,
+                                                                                    test_size=0.45)
+
+        #print(train_y_task[j], train_x_task[j].shape)
         progressive_learner.add_task(
-            X=train_x_task0,
-            y=train_y_task0,
-            task_id=0,
+            X=train_x_task[j],
+            y=train_y_task[j],
+            task_id=j,
             num_transformers=1 if model == "dnn" else ntrees,
             transformer_voter_decider_split=[0.67, 0.33, 0],
-            decider_kwargs={"classes": np.unique(train_y_task0)},
+            decider_kwargs={"classes": np.unique(train_y_task[j])},
         )
-        task_0_predictions = progressive_learner.predict(test_x_task0, task_id=0)
-        accuracies_across_tasks.append(np.mean(task_0_predictions == test_y_task0))
+        uf_predictions = progressive_learner.predict(
+            X = test_x_task[j], transformer_ids=[j], task_id=j
+            )
+        accuracies[j] = np.mean(uf_predictions == test_y_task[j])
 
         for k, contribute_speaker in enumerate(speakers):
-            if k == j:
+            if k > j:
                 pass
             else:
-                index = np.where(y_speaker == contribute_speaker)
-                x_train = x_all[index]
-                y_train = y_all[index]
-                progressive_learner.add_transformer(
-                    X=x_train,
-                    y=y_train,
-                    transformer_data_proportion=1,
-                    num_transformers=1 if model == "dnn" else ntrees,
-                    backward_task_ids=[0],
-                )
-            task_0_predictions = progressive_learner.predict(test_x_task0, task_id=0)
-            accuracies_across_tasks.append(np.mean(task_0_predictions == test_y_task0))
+                odif_predictions = progressive_learner.predict(test_x_task[k], task_id=k)
 
-    return accuracies_across_tasks
+            accuracies[6+k+(j*(j+1))//2] = np.mean(odif_predictions == test_y_task[k])
+
+    return accuracies
 
 
 def calculate_results(accuracy_all):
-    """
-    We have 6 tasks, each task generates 7 accuracies (among which 1 is redundant) in order to compute bte,
-    fte at each points, so there are 42 points in total.
-
-    This may help:
-
-    Position of Task0-only accuracy
-    '
-    = = - - - - -
-    - = = - - - -
-    - - = = - - -
-    - - - = = - -
-    - - - - = = -
-    - - - - - = =
-    """
+    
     num_tasks = 6
-    acc = [[] for _ in range(num_tasks)]
+    err = [[] for _ in range(num_tasks)]
     for i in range(num_tasks):
         for j in range(num_tasks - i):
-            acc[i].append(accuracy_all[7 * i + i + 1 + j])  # "7*i" first of each row, "+(i+1)" skip to the second "="
+            err[i].append(1 - accuracy_all[6+(j*(j+1))//2 + i ])  
 
     bte = [[] for _ in range(num_tasks)]
     for i in range(num_tasks):
         for j in range(num_tasks - i):
-            err_up_to_taskt = 1 - accuracy_all[7 * i + i + 1]
-            err_all_seen = 1 - accuracy_all[7 * i + i + 1 + j]  # "7*i + i+1" is at the second "="
-            bte[i].append(err_up_to_taskt / err_all_seen)
+            bte[i].append(err[i][0] / err[i][j])
 
-    fte = [[] for _ in range(num_tasks)]
+    fte = np.zeros(6,dtype=float)
     for i in range(num_tasks):
-        err_taskt_only = 1 - accuracy_all[7 * i]
-        err_up_to_taskt = 1 - accuracy_all[7 * i + i + 1]
-        fte[i].append(err_taskt_only / err_up_to_taskt)
+        fte[i] = (1-accuracy_all[i]) / err[i][0]
 
     te = [[] for _ in range(num_tasks)]
     for i in range(num_tasks):
         for j in range(num_tasks - i):
-            err_taskt_only = 1 - accuracy_all[7 * i]
-            err_all_seen = 1 - accuracy_all[7 * i + i + 1 + j]
-            te[i].append(err_taskt_only / err_all_seen)
+            te[i].append((1-accuracy_all[i]) / err[i][j])
 
-    return acc, bte, fte, te
+    return err, bte, fte, te
 
 
 def plot_results(acc, bte, fte, te):
@@ -261,7 +239,7 @@ def plot_results(acc, bte, fte, te):
     ax[1][0].hlines(1, 1, num_tasks, colors='grey', linestyles='dashed', linewidth=1.5)
 
     for i in range(num_tasks):
-        et = np.asarray(acc[i])
+        et = 1-np.asarray(acc[i])
         ns = np.arange(i + 1, num_tasks + 1)
         ax[1][1].plot(ns, et, c='red', linewidth=2.6)
 
