@@ -19,10 +19,9 @@ from proglearn.progressive_learner import ProgressiveLearner
 from proglearn.transformers import NeuralClassificationTransformer, TreeClassificationTransformer
 from proglearn.voters import TreeClassificationVoter, KNNClassificationVoter
 
-from tensorflow.keras.backend import clear_session  # To avoid OOM error when using dnn
+from tensorflow.keras.backend import clear_session # To avoid OOM error when using dnn
 
 from numpy import save
-
 
 def load_spoken_digit(path_recordings):
     file = os.listdir(path_recordings)
@@ -90,7 +89,7 @@ def single_experiment(x, y, y_speaker, ntrees=10, model='uf', shuffle=False):
         x_all = x
         y_all = y
 
-        clear_session()  # clear GPU memory before each run, to avoid OOM error
+        clear_session() # clear GPU memory before each run, to avoid OOM error
 
         default_transformer_class = NeuralClassificationTransformer
 
@@ -262,7 +261,6 @@ def plot_results(acc, bte, fte, te):
     ax[1][1].tick_params(labelsize=ticksize)
 
     sns.despine()
-
 
 def plot_paper_figure(bte, fte):
     sns.set_context("talk")
